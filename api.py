@@ -17,6 +17,7 @@ Ou directement:
 """
 
 import os
+import re
 import time
 import logging
 from typing import Optional
@@ -31,7 +32,6 @@ from pydantic import BaseModel, Field
 # ============================================================
 
 MODEL_BASE = "fastino/gliner2-multi-v1"
-ADAPTER_DIR = os.environ.get("NER_MODEL_DIR", "./benin_transport_ner_model/best")
 DEFAULT_THRESHOLD = float(os.environ.get("NER_THRESHOLD", "0.5"))
 MAX_TEXT_LENGTH = 500
 HOST = os.environ.get("NER_HOST", "0.0.0.0")
@@ -41,6 +41,25 @@ ALL_ENTITY_TYPES = [
     "Departure", "Destination", "Via", "Time",
     "Date", "Passengers", "TripType", "Purpose",
 ]
+
+# Villes béninoises connues (pour distinguer "Cotonou-Parakou" de "Porto-Novo")
+BENIN_CITIES = {
+    "cotonou", "parakou", "abomey", "porto-novo", "ouidah", "djougou",
+    "natitingou", "bohicon", "kandi", "lokossa", "malanville", "nikki",
+    "savalou", "dassa", "savè", "godomey", "calavi", "jonquet",
+    "abomey-calavi", "comè", "dogbo", "allada", "azovè",
+    "banikoara", "bassila", "bembèrèkè", "bétérou", "cobly", "covè",
+    "glazoué", "grand-popo", "kétou", "kouandé", "pobè", "sakété",
+    "tchaourou", "tanguiéta",
+}
+
+# Pattern : Mot1-Mot2 ou Mot1/Mot2 (mots capitalisés)
+ROUTE_PATTERN = re.compile(
+    r'\b([A-ZÀ-Ü][a-zà-ü]+(?:-[A-ZÀ-Ü][a-zà-ü]+)*)'
+    r'\s*[-/]\s*'
+    r'([A-ZÀ-Ü][a-zà-ü]+(?:-[A-ZÀ-Ü][a-zà-ü]+)*)\b',
+    re.UNICODE,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)

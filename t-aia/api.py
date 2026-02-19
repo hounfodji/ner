@@ -17,6 +17,7 @@ Ou directement:
 """
 
 import os
+import re
 import time
 import logging
 from typing import Optional
@@ -40,6 +41,25 @@ ALL_ENTITY_TYPES = [
     "Departure", "Destination", "Via", "Time",
     "Date", "Passengers", "TripType", "Purpose",
 ]
+
+# Villes béninoises connues (pour distinguer "Cotonou-Parakou" de "Porto-Novo")
+BENIN_CITIES = {
+    "cotonou", "parakou", "abomey", "porto-novo", "ouidah", "djougou",
+    "natitingou", "bohicon", "kandi", "lokossa", "malanville", "nikki",
+    "savalou", "dassa", "savè", "godomey", "calavi", "jonquet",
+    "abomey-calavi", "comè", "dogbo", "allada", "azovè",
+    "banikoara", "bassila", "bembèrèkè", "bétérou", "cobly", "covè",
+    "glazoué", "grand-popo", "kétou", "kouandé", "pobè", "sakété",
+    "tchaourou", "tanguiéta",
+}
+
+# Pattern : Mot1-Mot2 ou Mot1/Mot2 (mots capitalisés)
+ROUTE_PATTERN = re.compile(
+    r'\b([A-ZÀ-Ü][a-zà-ü]+(?:-[A-ZÀ-Ü][a-zà-ü]+)*)'
+    r'\s*[-/]\s*'
+    r'([A-ZÀ-Ü][a-zà-ü]+(?:-[A-ZÀ-Ü][a-zà-ü]+)*)\b',
+    re.UNICODE,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -80,6 +100,40 @@ INVALID_DATE_PATTERNS = [
     "natitingou", "bohicon", "kandi", "lokossa", "malanville", "nikki",
     "savalou", "dassa", "savè", "godomey", "calavi", "jonquet",
 ]
+
+
+def preprocess_text(text: str) -> str:
+    """Réécrit 'Ville1-Ville2' en 'de Ville1 à Ville2' quand les deux parties
+    correspondent à des villes béninoises connues."""
+    def replace_route(match):
+        city1, city2 = match.group(1), match.group(2)
+        if city1.lower() in BENIN_CITIES and city2.lower() in BENIN_CITIES:
+            return f"de {city1} à {city2}"
+        return match.group(0)
+
+    return ROUTE_PATTERN.sub(replace_route, text)
+
+
+def split_compound_locations(entities: dict) -> dict:
+    """Si un Departure ou Destination contient un '-' ou '/' entre deux villes connues,
+    splitte et réassigne (filet de sécurité post-extraction)."""
+    for label in ("Departure", "Destination"):
+        if label not in entities:
+            continue
+        new_mentions = []
+        for mention in entities[label]:
+            parts = re.split(r'\s*[-/]\s*', mention)
+            if len(parts) == 2 and all(p.lower().strip() in BENIN_CITIES for p in parts):
+                if label == "Departure":
+                    new_mentions.append(parts[0].strip())
+                    entities.setdefault("Destination", []).append(parts[1].strip())
+                else:
+                    entities.setdefault("Departure", []).append(parts[0].strip())
+                    new_mentions.append(parts[1].strip())
+            else:
+                new_mentions.append(mention)
+        entities[label] = new_mentions
+    return entities
 
 
 def post_process(entities_dict: dict) -> dict:
@@ -167,13 +221,13 @@ def load_model():
 
 
 def extract_entities(text: str, threshold: float, entity_types: list[str]) -> dict:
-    schema = model.create_schema().entities(entity_types)
-    result = model.extract(text, schema)
+    # Pré-traitement : réécrire "Cotonou-Parakou" → "de Cotonou à Parakou"
+    processed_text = preprocess_text(text)
+    if processed_text != text:
+        logger.info("PRE-PROCESS: '%s' → '%s'", text, processed_text)
 
-    # DEBUG — à supprimer après diagnostic
-    logger.info("RAW TYPE: %s", type(result))
-    logger.info("RAW KEYS: %s", result.keys() if isinstance(result, dict) else "NOT DICT")
-    logger.info("RAW DATA: %s", str(result)[:500])
+    schema = model.create_schema().entities(entity_types)
+    result = model.extract(processed_text, schema)
 
     raw = {}
     for etype, mentions_data in result["entities"].items():
@@ -187,8 +241,9 @@ def extract_entities(text: str, threshold: float, entity_types: list[str]) -> di
                 processed.append((str(item), 1.0))
         raw[etype] = processed
 
-    logger.info("PARSED: %s", raw)
-    return post_process(raw)
+    entities = post_process(raw)
+    # Post-traitement : splitter les spans composés résiduels
+    return split_compound_locations(entities)
 
 
 # ============================================================
